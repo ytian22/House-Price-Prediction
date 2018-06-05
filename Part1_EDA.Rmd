@@ -1,0 +1,385 @@
+---
+title: "MSAN 691 Linear Regression Case Study"
+author: "Dixin Yan, Yu Tian, Jade Yun, Zhengjie Xu"
+date: "10/5/2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(include = FALSE, cache = TRUE, warning=FALSE)
+```
+\pagenumbering{gobble}
+
+## Part I Exploratory Modeling  
+
+### Task 1
+
+```{r}
+library(tidyverse)
+library(magrittr)
+library(corrplot)   # corrplot
+library(faraway)    # vif
+library(glmnet)     # ridge and lasso
+library(MASS)       # boxcox transformation
+```
+
+For this part of the case study, our goal is to determine and explain what features of a house (the regressors) are most relevant in determining its expected sales price (the regressand). Since we are concerned with the explanatory power of the model, we need to validate assumptions for our final model.  
+
+**Procedures:** 
+
+### 1. Exploratory Data Analysis:  
+
+```{r}
+filepath <- "/Users/yandixin_929/Desktop/MSAN/Linear_Regression/LR_project/housing.csv"
+datain <- read.csv(filepath, stringsAsFactors = F)
+```
+
+```{r}
+str(datain)
+```
+
+* Examine the structure of raw data: total of 1470 observations and 81 variables 
+* Identify the data type of variables: composed of 43 factor/character variables and 38 numeric variables
+* Identify variables with NAs: total 17 variables with NA values
+* Imputation of missing values  
+
+```{r}
+number_missing_value <- colSums(is.na(datain))
+with_na <- number_missing_value[number_missing_value!=0]
+variable_with_na <- names(with_na)
+type_variable_with_na <- sapply(datain[variable_with_na], class)
+
+NA_table <- cbind(with_na, type_variable_with_na)[order(type_variable_with_na, -with_na),]
+```
+
+
+**Missing Values:**  
+
+We notice that R would interpret those missing values as the built-in NA values, which is not desirable as some have true meanings. It is important to determine whether the NA value is missing from the collection of data or it represents a property of the underlying variable. Below is the summary of the variables that contain NA values and ways of dealing with those values.
+
+```{r}
+NA_treatment <- c("No Pool", "No MiscFeature", "No Alley", "No Fence", "No Fireplace", "No Garage", "No Garage", "No Garage", "No Garage", "No Basement", "No Basement", "No Basement", "No Basement", "No Basement", "No MasVnr", "take the mode", "take the average", "same as YrBlt", 0)
+NA_table2 <- knitr::kable(cbind(NA_table,NA_treatment), col.names = c("Number of NAs","Data Type","NA_treatment"), align = "c")
+```
+
+```{r, echo=FALSE, include=T}
+NA_table2
+```
+
+```{r}
+# LotFrantage: use average value, because it does not make sense to be zero
+datain$LotFrontage[is.na(datain$LotFrontage)] <-
+  datain$LotFrontage[!is.na(datain$LotFrontage)] %>% mean()
+
+# GarageYrBlt: The missing values mean no garage in the house; we have considered to convert all
+# GarageYrBlt into factor and view the NAs as a new level(No Garage), however, this will divide
+# GarageYrBlt into many sub-variables, and change the problem into within group difference (whether
+# 2010's price is higher than 1900's price), instead of treat GarageYrBlt as one varible. So we
+# decide to replace NAs with YearBuilt, and keep GarageYrBlt as a numeric variable. This might cause
+# little bias, but the bias is small b/c only a small number of observations are adjusted.
+datain$GarageYrBlt[is.na(datain$GarageYrBlt)] <- datain$YearBuilt[is.na(datain$GarageYrBlt)]
+
+# MasVnrArea: set to 0
+datain$MasVnrArea[is.na(datain$MasVnrArea)] <- 0
+
+# For most charater variables, set all NAs as new level of factor
+datain$Alley[is.na(datain$Alley)] <- "No Alley"
+datain$MasVnrType[is.na(datain$MasVnrType)] <- "No MasVnr"
+datain$BsmtQual[is.na(datain$BsmtQual)] <- "No Basement"
+datain$BsmtCond[is.na(datain$BsmtCond)] <- "No Basement"
+datain$BsmtExposure[is.na(datain$BsmtExposure)] <- "No Basement"
+datain$BsmtFinType1[is.na(datain$BsmtFinType1)] <- "No Basement"
+datain$BsmtFinType2[is.na(datain$BsmtFinType2)] <- "No Basement"
+datain$FireplaceQu[is.na(datain$FireplaceQu)] <- "No Garage"
+datain$GarageType[is.na(datain$GarageType)] <- "No Garage"
+datain$GarageFinish[is.na(datain$GarageFinish)] <- "No Garage"
+datain$GarageQual[is.na(datain$GarageQual)] <- "No Garage"
+datain$GarageCond[is.na(datain$GarageCond)] <- "No Garage"
+datain$PoolQC[is.na(datain$PoolQC)] <- "No Pool"
+datain$Fence[is.na(datain$Fence)] <- "No Fence"
+datain$MiscFeature[is.na(datain$MiscFeature)] <- "No MiscFeature"
+
+# Electrical: use mode(only 1 missing)
+datain$Electrical[is.na(datain$Electrical)] <- "SBrkr"
+
+```
+
+\newpage
+
+**Examine the correlation between variables:**  
+
+There are 10 regressors exhibiting strong correlations with the regressand (`SalePrice`): 
+`OverallQual`, `YearBuilt`, `YearRemodAdd`, `TotalBsmtSF`, `X1stFlrSF`, `GrLivArea`, `FullBath`, `TotRmsAbvGrd`, `GarageCars` and `GarageArea`. Please refer to the following graph for the visualization of the correlations between the regressand: 
+
+```{r}
+numeric_var <- names(datain)[sapply(datain, is.numeric)]
+correlation <- cor(datain[numeric_var])
+row_idx <- sapply(correlation[,"SalePrice"], function(x) (x>0.5|x< -0.5)) %>% which()
+
+```
+
+```{r, echo=FALSE, include=T}
+corrplot(correlation[row_idx, row_idx], type = "upper", addCoef.col = 'black', number.cex=.5)
+```
+
+
+#### 2. Variable Selection and Fit the Model  
+
+```{r}
+ols_fit1 <- lm(SalePrice~.-Id, data = datain)
+summary(ols_fit1)
+```
+
+**Build OLS model with all variables:**  
+
+The adjusted R-squared value (0.92)  and the F-statistics value (66.99) indicate that the OLS model can explain the variance in the dependent variable very well. Although that overall, all 81 regressors have significant effects on the response, when closely inspecting each regressor, the individual p-value of some are too large to have an significant effect on regressand. For example, the p-value of  FireplaceQuFa (0.904715) indicates that its effect on regressand is minor. Thus, it is necessary for us to perform variable selection.  
+
+**Check for Multicollinearity:**  
+
+The variance inflation factor shows that there are variables that are affected by multicollinearity since some estimators have variance inflation factor greater than 10.  
+
+```{r, warning=FALSE}
+# look at the variance inflation factor
+any(vif(ols_fit1)>10)
+```
+
+**Use lasso to select variables:**  
+
+To select important features, we run the LASSO model and leverage the feature that it would push some insignificant variables to zero.  
+
+The result shows that, for a factor, some levels are statistically significant while others are not. We can divide the variable into sub-variables corresponding to different levels. We decide to select the variable as long as it has at least one significant level.  
+```{r}
+X = model.matrix(SalePrice~.-1-Id, data = datain)
+Y = datain$SalePrice
+
+cv.lasso <- cv.glmnet(X,Y,alpha=1)  # cross validation for lasso
+best.lambda <- cv.lasso$lambda.min
+plot(cv.lasso)
+abline(v=log(best.lambda), col="blue")
+model.lasso <- glmnet(X, Y, lambda = best.lambda)
+blasso <- model.lasso$beta
+blasso
+```
+
+
+After the above considerations, we have selected the following variables:  `MSSubClass`, `MSZoning`, `LotArea`, `Street`, `LotShape`, `LandContour`, `Utilities`, `LotConfig`, `Neighborhood`, `Condition1`, `Condition2`, `BldgType`, `OverallQual`, `OverallCond`, `YearBuilt`, `YearRemodAdd`, `RoofStyle`, `RoofMatl`, `Exterior1st`, `Exterior2nd`, `MasVnrType`, `MasVnrArea`, `ExterQual`, `Foundation`, `BsmtQual`, `BsmtCond`, `BsmtExposure`, `BsmtFinType1`, `BsmtFinSF1`, `BsmtFinType2`, `TotalBsmtSF`, `Heating`, `LowQualFinSF`, `GrLivArea`, `BsmtFullBath`, `FullBath`, `BedroomAbvGr`, `KitchenAbvGr`, `KitchenQual`,`Functional`, `Fireplaces`, `GarageType`, `GarageFinish`, `GarageCars`, `GarageArea`, `GarageQual`, `WoodDeckSF`, `OpenPorchSF`, `ScreenPorch`, `PoolArea`, `PoolQC`, `SaleType`, `SaleCondition`.
+
+**Use selected variables to fit OLS model:**  
+
+The result shows that after variable selection, almost every variable is statistically significant at level of 0.05. The overall F statistics is 83.74, the p-value is very small, and the Adjusted R-squared is 0.92. According to AIC criteria, our model has better performance after variable selection. Thus, we can say that the variables chosen are most relevant in determining the sale price.  
+
+```{r}
+myvar <- c('MSSubClass', 'MSZoning', 'LotArea', 'Street', 'LotShape', 'LandContour', 'Utilities',
+           'LotConfig', 'Neighborhood', 'Condition1', 'Condition2', 'BldgType', 'OverallQual',
+           'OverallCond', 'YearBuilt', 'YearRemodAdd', 'RoofStyle', 'RoofMatl', 'Exterior1st',
+           'Exterior2nd', 'MasVnrType', 'MasVnrArea', 'ExterQual', 'Foundation', 'BsmtQual',
+           'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinSF1', 'BsmtFinType2', 'TotalBsmtSF',
+           'Heating', 'LowQualFinSF', 'GrLivArea', 'BsmtFullBath', 'FullBath', 'BedroomAbvGr',
+           'KitchenAbvGr', 'KitchenQual','Functional', 'Fireplaces', 'GarageType', 'GarageFinish',
+           'GarageCars', 'GarageArea', 'GarageQual', 'WoodDeckSF', 'OpenPorchSF', 'ScreenPorch',
+           'PoolArea', 'PoolQC', 'SaleType', 'SaleCondition')
+
+mydata <- datain[c(myvar,"SalePrice")]
+
+ols_fit2 <- lm(SalePrice~., data = mydata)
+summary(ols_fit2)
+```
+
+
+```{r}
+# check anova table
+myanova_fit2 <- aov(ols_fit2)
+summary(myanova_fit2)
+# check AIC of our model
+AIC(ols_fit2)
+AIC(ols_fit2)<AIC(ols_fit1)
+```
+
+From the size of the coefficients, we can tell that `RoofMaltl(roof material)`, `PoolQC(pool quality)`, `Roofstyle`, `Neighborhood` and `Condition` have the largest effects on `SalePrice`.
+
+```{r}
+head(sort(coef(ols_fit2), decreasing = T),20)
+```
+
+#### 3.  Validation of Model   
+
+**A Quick Diagnostic Analysis**  
+
+Please refer to the plot below.  
+
+```{r, echo=FALSE, include=T}
+par(mfrow=c(2,2))
+plot(ols_fit2)
+```
+
+Since residuals-versus-fitted plot shows approximately flat trend with equal vertical spreads, the linear model assumption holds.  
+
+Because the points on Q-Q plot does not show an approximate straight line, the error terms do not satisfy the normality assumption.  
+
+The Scale-Location does not follow a flat trend, which means that error terms do not follow homoscedasticity.  
+
+There are three points on residuals-versus-leverage plot falling outside of the red dashed lines, which indicates that these are the influential points. These three error points correspond to observation #524, #826 and #1183 respectively.  
+
+**Formally test assumptions**  
+
+```{r}
+# test normality using Shapiro-Wilk Test
+shapiro.test(ols_fit2$residuals)
+# test constant variance
+car::ncvTest(ols_fit2)
+
+car::outlierTest(ols_fit2)
+
+# test for influential points
+cook <- cooks.distance(ols_fit2)
+infl_points <- which(cook > 4/nobs(ols_fit2))
+infl_points
+```
+
+The Shapiro-Wilk test indicates that normal distribution assumption of error terms is not satisfied. The non-constant variance test indicates that the variance of the error term is not constant. From the outlier test, we can see there are 10 outliers. Since the error terms are not normally distributed according to the Shapiro-Wilk test, the result of non-constant variance test and outlier test may be unreliable. It is essential to take this into consideration when we construct our model.  
+
+The above tests tell us that we need to apply transformation algorithms to improve the model performance. We choose to apply a box-cox transformation first, and further transform the independent variables that are highly skewed if the normality assumption still does not hold.  
+
+
+**Box-Cox Transformation**  
+
+
+```{r, echo=FALSE, include=T}
+boxcox(ols_fit2)
+```
+
+After running a Box-Cox test in R, we get a lambda approximating to 0 as shown in the Box-Cox plot above, which suggests a log transformation on the regressand values.  
+
+We fit the model again with log transformation on `SalePrice`. The diagnostics plot below shows that the problem with non-constant variance is less significant and the non-normality is sort of relieved at the upper tail (as seen from the top right plot in the chart below). However, error terms are still not normally distributed. Therefore, we further transform all skewed independent variables and then fit the model again.  
+
+```{r}
+mydata_no_outlier <- mydata[-infl_points,]   # drop influential 
+ols_fit3 <- lm(log(SalePrice+1)~., data = mydata_no_outlier)
+
+```
+
+
+```{r, echo=FALSE, include=T}
+par(mfrow=c(2,2))
+plot(ols_fit3)
+```
+
+  
+**Transform skewed regressor**  
+
+For numeric variables that are highly skewed, we choose to transform excessively skewed features with log(x+1). We get the diagnostics plots below.  
+
+```{r}
+# get numeric variables
+numeric_var <- colnames(mydata_no_outlier)[sapply(mydata_no_outlier, is.numeric)]
+
+# determine skewness for each nuemric variable
+skewed_numeric_var <- sapply(mydata_no_outlier[numeric_var], function(x) moments::skewness(x))
+
+# keep only variables that exceed a threshold for skewness
+skewed_numeric_var_name <- names(skewed_numeric_var)[skewed_numeric_var>0.75]
+##################
+# [1] "MSSubClass"   "LotArea"      "MasVnrArea"   "BsmtFinSF1"   "TotalBsmtSF"  "LowQualFinSF"
+#  [7] "GrLivArea"    "KitchenAbvGr" "WoodDeckSF"   "OpenPorchSF"  "ScreenPorch"  "PoolArea"    
+# [13] "SalePrice"
+##################
+
+# transform excessively skewed features with log(x+1)
+mydata_no_skew <- mydata_no_outlier
+mydata_no_skew[skewed_numeric_var_name] <- log(mydata_no_skew[skewed_numeric_var_name]+1)
+
+# fit the model again
+ols_fit4 <- lm(SalePrice~., data = mydata_no_skew)    # SalePrice is already logged in mydata_no_skew
+```
+
+```{r, echo=FALSE, include=T}
+par(mfrow=c(2,2))
+plot(ols_fit4)
+```
+
+```{r}
+# test normality using Shapiro-Wilk Test
+shapiro.test(ols_fit4$residuals)
+```
+
+```{r}
+# test constant variance
+car::ncvTest(ols_fit4)
+```
+
+Yet, after all the efforts we tried (box-cox transformation, independent variables transformation, outliers deletion), the normal and constant variance assumptions over error terms still do not hold.  
+
+
+**Compare the model accuracy**  
+
+Fortunately, the model acquired has the lowest MSE after all transformations (as indicated by the plot below), which means that we successfully optimized our model to our best.  
+
+```{r}
+# compare model accuracy
+MSE1 <- sum(ols_fit2$residuals^2)/nobs(ols_fit2)
+MSE2 <- sum((mydata_no_outlier$SalePrice-exp(fitted(ols_fit3)))^2)/nobs(ols_fit3)
+MSE3 <- sum((exp(mydata_no_skew$SalePrice)-exp(fitted(ols_fit4)))^2)/nobs(ols_fit4)
+```
+
+```{r, echo=FALSE, include=T,fig.height=3,fig.width=3.5, fig.align="center"}
+barplot(c(MSE1,MSE2,MSE3), xlab = "Model", ylab = "MSE",names.arg=c("MSE1","MSE2","MSE3"))
+```
+
+
+**Other Consideration**  
+
+We also tried to further remove influential points identified by the Cook’s distance.  
+
+```{r}
+cook4 <- cooks.distance(ols_fit4)
+infl_points4 <- which(cook4 > 4/nobs(ols_fit4))
+mydata_no_outlier4 <- mydata_no_skew[-infl_points4,]   # drop influential points
+ols_fit5 <- lm(SalePrice~., data = mydata_no_outlier4)
+```
+
+```{r, echo=FALSE, include=T}
+par(mfrow=c(2,2))
+plot(ols_fit5)
+```
+
+
+From the graph above, we see that the normality and constant variance assumptions for error terms are satisfied. However, the downside is that we have to drop 190 observations from the original dataset. This method is not appropriate because it is like we are altering data in order to fit the model. We choose to not deal with the influential points.  
+
+\newpage
+
+### Task 2  
+
+**Predict the maximum sale price for Morty**  
+
+```{r}
+# read in data
+morty <- read.csv("/Users/yandixin_929/Desktop/MSAN/Linear_Regression/LR_project/Morty.csv", stringsAsFactors = F)
+
+# select relevant varibale
+morty <- morty[c(myvar,"SalePrice")]
+
+# deal with missing value
+morty$PoolQC[is.na(morty$PoolQC)] <- "No Pool"
+
+# transform independent variables
+morty[skewed_numeric_var_name] <- log(morty[skewed_numeric_var_name]+1)
+
+# predict sales price
+max_price <- predict(ols_fit4, morty, interval = "prediction")[1,3] %>% exp()
+max_price
+```
+
+
+We use the Morty’s data to fit the model to acquire the predicted sales price for his house. The upper bound of the prediction interval is used to obtain the maximum price, which is $182,501.9.  
+
+
+**Aspects he can change to increase sales price**   
+
+
+```{r, echo=FALSE, include=T}
+knitr::kable(head(sort(ols_fit4$coefficients, decreasing = T), 20))
+```
+
+The table above presents the top 20 coefficients ordered by size after running our model. We discovered that `RoofMatl`(roof material), `BsmtQual` (basement quality), and `GrLivArea`(above ground living area) had the greatest impact on sales price. We recommend Morty to upgrade his basement quality to excellent, replace Roof Material from Compshg to Membran, and enlarge the above ground living area. These changes will increase the sales price of his house.  
+
+

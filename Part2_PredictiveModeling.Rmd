@@ -1,0 +1,177 @@
+---
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include = FALSE, cache = TRUE, warning = FALSE)
+```
+
+\pagenumbering{gobble}
+```{r}
+library(tidyverse)
+library(glmnet)
+
+datain <- data.frame(read.csv("/Users/ty/housing.csv",stringsAsFactors = F))
+
+# Missing value processing (copy from Part1)
+datain$LotFrontage[is.na(datain$LotFrontage)] <-
+  datain$LotFrontage[!is.na(datain$LotFrontage)] %>% mean()
+datain$GarageYrBlt[is.na(datain$GarageYrBlt)] <- datain$YearBuilt[is.na(datain$GarageYrBlt)]
+datain$MasVnrArea[is.na(datain$MasVnrArea)] <- 0
+datain$Alley[is.na(datain$Alley)] <- "No Alley"
+datain$MasVnrType[is.na(datain$MasVnrType)] <- "No MasVnr"
+datain$BsmtQual[is.na(datain$BsmtQual)] <- "No Basement"
+datain$BsmtCond[is.na(datain$BsmtCond)] <- "No Basement"
+datain$BsmtExposure[is.na(datain$BsmtExposure)] <- "No Basement"
+datain$BsmtFinType1[is.na(datain$BsmtFinType1)] <- "No Basement"
+datain$BsmtFinType2[is.na(datain$BsmtFinType2)] <- "No Basement"
+datain$FireplaceQu[is.na(datain$FireplaceQu)] <- "No Garage"
+datain$GarageType[is.na(datain$GarageType)] <- "No Garage"
+datain$GarageFinish[is.na(datain$GarageFinish)] <- "No Garage"
+datain$GarageQual[is.na(datain$GarageQual)] <- "No Garage"
+datain$GarageCond[is.na(datain$GarageCond)] <- "No Garage"
+datain$PoolQC[is.na(datain$PoolQC)] <- "No Pool"
+datain$Fence[is.na(datain$Fence)] <- "No Fence"
+datain$MiscFeature[is.na(datain$MiscFeature)] <- "No MiscFeature"
+datain$Electrical[is.na(datain$Electrical)] <- "SBrkr"
+
+x <- model.matrix(SalePrice~.,data = datain)[,-c(1:2)]
+y <- datain$SalePrice
+
+grid.lambda <- 10^seq(10,-2,length = 100)
+
+# Train & Test set (each 50% of the entire dataset)
+set.seed(1)
+train <- sample(1:nrow(x), nrow(x) / 2)
+test <- (-train)
+y.train <- y[train]
+y.test <- y[test]
+
+# Fit models - OLS
+model_train_ols <- lm(SalePrice~.-Id, data = datain[train,])
+
+# Fit models - Ridge, Elastic Net, Lasso
+model_train_ridge <- glmnet(x[train, ], y.train, alpha = 0, lambda = grid.lambda)
+model_train_0.2 <- glmnet(x[train, ], y.train, alpha = 0.2, lambda = grid.lambda)
+model_train_0.4 <- glmnet(x[train, ], y.train, alpha = 0.4, lambda = grid.lambda)
+model_train_0.6 <- glmnet(x[train, ], y.train, alpha = 0.6, lambda = grid.lambda)
+model_train_0.8 <- glmnet(x[train, ], y.train, alpha = 0.8, lambda = grid.lambda)
+model_train_lasso <- glmnet(x[train, ], y.train, alpha = 1, lambda = grid.lambda)
+
+# Perform cross validation
+set.seed(1)
+cv_out_ridge <- cv.glmnet(x[train, ], y.train, alpha = 0)
+cv_out_0.2 <- cv.glmnet(x[train, ], y.train, alpha = 0.2)
+cv_out_0.4 <- cv.glmnet(x[train, ], y.train, alpha = 0.4)
+cv_out_0.6 <- cv.glmnet(x[train, ], y.train, alpha = 0.6)
+cv_out_0.8 <- cv.glmnet(x[train, ], y.train, alpha = 0.8)
+cv_out_lasso <- cv.glmnet(x[train, ], y.train, alpha = 1)
+
+# Find out best lambda for each
+(best_lambda_ridge <- cv_out_ridge$lambda.min)
+(best_lambda_0.2 <- cv_out_0.2$lambda.min)
+(best_lambda_0.4 <- cv_out_0.4$lambda.min)
+(best_lambda_0.6 <- cv_out_0.6$lambda.min)
+(best_lambda_0.8 <- cv_out_0.8$lambda.min)
+(best_lambda_lasso <- cv_out_lasso$lambda.min)
+
+# Calculate MSPE for each
+pred_ols <- predict(model_train_ols, newx = datain[test,])
+pred_ridge <- predict(model_train_ridge, s = best_lambda_ridge, newx = x[test,])
+pred_0.2 <- predict(model_train_0.2, s = best_lambda_0.2, newx = x[test,])
+pred_0.4 <- predict(model_train_0.4, s = best_lambda_0.4, newx = x[test,])
+pred_0.6 <- predict(model_train_0.6, s = best_lambda_0.6, newx = x[test,])
+pred_0.8 <- predict(model_train_0.8, s = best_lambda_0.8, newx = x[test,])
+pred_lasso <- predict(model_train_lasso, s = best_lambda_lasso, newx = x[test,])
+
+mspe_ols <- mean((pred_ols-y.test)^2)
+mspe_ridge <- mean((pred_ridge-y.test)^2)
+mspe_0.2 <- mean((pred_0.2-y.test)^2)
+mspe_0.4 <- mean((pred_0.4-y.test)^2)
+mspe_0.6 <- mean((pred_0.6-y.test)^2)
+mspe_0.8 <- mean((pred_0.8-y.test)^2)
+mspe_lasso <- mean((pred_lasso-y.test)^2)
+
+# Fit the final model to entire dataset
+final_ols <- lm(SalePrice~.-Id, data = datain)
+final_ridge <- glmnet(x,y,alpha=0,lambda=best_lambda_ridge)
+final_0.2 <- glmnet(x,y,alpha=0.2,lambda=best_lambda_0.2)
+final_0.4 <- glmnet(x,y,alpha=0.4,lambda=best_lambda_0.4)
+final_0.6 <- glmnet(x,y,alpha=0.6,lambda=best_lambda_0.6)
+final_0.8 <- glmnet(x,y,alpha=0.8,lambda=best_lambda_0.8)
+final_lasso <- glmnet(x,y,alpha=1,lambda=best_lambda_lasso)
+
+# Compare the coefficients and MSPEs of models
+coefficients1 <- data.frame(OLS = coef(final_ols)[1:100], Ridge = coef(final_ridge)[1:100], Lasso = coef(final_lasso)[1:100])
+
+coefficients2 <- data.frame(OLS = coef(final_ols)[101:200], Ridge = coef(final_ridge)[101:200], Lasso = coef(final_lasso)[101:200])
+
+coefficients3 <- data.frame(OLS = coef(final_ols)[201:260], Ridge = coef(final_ridge)[201:260], Lasso = coef(final_lasso)[201:260])
+
+MSPE <- data.frame(OLS = mspe_ols, Ridge = mspe_ridge, Elastic.Net_0.2 = mspe_0.2, Elastic.Net_0.4 = mspe_0.4, Elastic.Net_0.6 = mspe_0.6, Elastic.Net_0.8 = mspe_0.8, Lasso = mspe_lasso)
+
+```
+
+
+##Part II Predictive Modeling
+
+For this part of the case study, we need to come up with a predictive model that would best capture the sales price of a new house in the market. The models we considered include OLS, Ridge regression, LASSO regression, and Elastic Net regression. Since we are solely concerned with the prediction accuracy of the model, we do not validate the assumptions for each regression model. We choose the best model which gives the least MSPE for the testing data. 
+
+To begin with, we impute the missing values in the same way as in Part I. For each regression model of Ridge, LASSO, and Elastic Net, we search over the same grid of lambda, ranging from $10^{-2}$ to $10^{10}$, for the best lambda respectively. We split the dataset into train set (50%) and test set (50%) by random sampling. Furthermore, to ensure comparability, we use the same train set and test set for each model. 
+
+Please refer to the following graphs for the different shrinking effects of the three models. 
+
+
+```{r include = TRUE, fig.height = 3, fig.width = 10, echo= F}
+par(mar=c(1,1,1,1))
+par(mfrow=c(1,3))
+plot(model_train_ridge, main = "Ridge")
+plot(model_train_0.6, main = "Elastic Net (alpha = 0.6)")
+plot(model_train_lasso, main = "Lasso")
+```
+
+
+We see that LASSO reduces a number of estimators to zero, while Ridge shrinks the estimators but none will ultimately reach exact zero. Elastic Net has a combination of effects of both Ridge and LASSO. 
+
+The following describes the steps taken for fitting the Ridge regression:
+
+* Create lambda grid
+* Split dataset into train (50%) and test (50%) by random sampling
+* Fit Ridge regression model (glmnet) on the train set of data with alpha = 0
+* Cross-validate the model with cv.glmnet and choose the best lambda
+* Predict the response on test set of data using the lambda chosen from step 4
+* Calculate the MSPE from the prediction
+
+For Elastic Net and Lasso, the changes are in different values of alpha. For Lasso we use alpha = 1, and for elastic net we use alpha = 0.2, 0.4, 0.6, 0.8, respectively. 
+
+The following graphs depict the best lambda selection process for each model. The best lambda corresponds to the lowest average MSPE within the cross-validation test sets. 
+
+
+```{r include=TRUE, fig.height = 3, fig.width = 10, echo = F}
+par(mar=c(1,1,1,1))
+par(mfrow=c(1,3))
+
+plot(cv_out_ridge, main="Ridge")
+abline(v = log(best_lambda_ridge), col = "blue", lwd = 2)
+
+plot(cv_out_0.6, main="Elastic Net (alpha = 0.6)")
+abline(v = log(best_lambda_0.6), col = "blue", lwd = 2)
+
+plot(cv_out_lasso, main="Lasso")
+abline(v = log(best_lambda_lasso), col = "blue", lwd = 2)
+```
+
+
+For OLS method, we use the same train set to fit a Linear Regression model and get the MSPE by predicting the test set.
+
+Comparing the results of MSPE from all models as shown below, Ridge has the least value and therefore we determine Ridge is the best model in this case. 
+
+
+```{r include=TRUE, echo = F, options(scipen = 5, digits = 5)}
+MSPE2 <- data.frame(Model = c("OLS", "Ridge", "Elastic.Net_0.2", "Elastic.Net_0.4", "Elastic.Net_0.6","Elastic.Net_0.8","Lasso"), MSPE = c(12458934868, 1530415655, 1617495572, 1628006047, 1636572023, 1639512301, 1646053963))
+
+knitr::kable(MSPE2,align = "r", caption = "MSPE for Different Models", format.args = list(big.mark = ','))
+```
+
+
+In the end, after choosing the best model (Ridge), we refit the entire dataset to get the final model. 
