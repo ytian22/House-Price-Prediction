@@ -35,4 +35,4 @@ The following describes the steps taken for fitting the Ridge regression:
 * Calculate the MSPE from the prediction
 
 
-## Full Report: https://drive.google.com/drive/u/1/folders/1_dVRUV_y0H203m3dMgM7bVBB_VpK-iu5
+##### Full Report: https://drive.google.com/drive/u/1/folders/1_dVRUV_y0H203m3dMgM7bVBB_VpK-iu5
